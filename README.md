@@ -1,6 +1,17 @@
 # Map
 Collection of scripts to create custom maps out of map screenshots
 
+## Requirements
+- [Python 3.11](https://www.python.org/downloads)
+- [Firefox](https://www.mozilla.org/en-US/firefox/new)
+- [GeckoDriver](https://github.com/mozilla/geckodriver)
+
+## Usage
+Make sure that the DRIVER variable (at the top of `map.py`)
+is pointing to the location of the GeckoDriver executable
+
+Run the script: `python map.py`
+
 ## How does it work?
 I'm using [Mapy.cz](https://mapy.cz) as a source of screenshots which are
 then stitched together using [PanoTools](https://wiki.panotools.org/Main_Page).
