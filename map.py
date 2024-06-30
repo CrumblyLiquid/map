@@ -1,12 +1,18 @@
-from typing import List
+from typing import List, Self
 from math import ceil
-
-DRIVER: str ="/usr/bin/geckodriver"
 
 # Selenium
 # On Arch: python-selenium and geckodriver packages are required
 from selenium.webdriver import Firefox, FirefoxService
 from selenium.webdriver.firefox.webdriver import WebDriver
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException
+
+# TODO:
+# - Detect swapped east/west or south/north bounds
+# - Choose output name/folder
 
 class Position:
     x: float
@@ -18,149 +24,219 @@ class Position:
         self.y = y
         self.z = z
 
+    def __add__(self, other):
+        return Position(self.x + other.x, self.y + other.y, self.z)
+
+    def __sub__(self, other):
+        return Position(self.x - other.x, self.y - other.y, self.z)
+
+    def __neg__(self):
+        return Position(self.x, self.y, self.z)
+
     def __str__(self) -> str:
-        return f"Position: x = {self.x}, y = {self.y}, z = {self.z}"
+        return f"Position (x = {self.x}, y = {self.y}, z = {self.z})"
 
-def get_url(pos: Position):
-    return f"https://mapy.cz/turisticka?l=0&x={pos.x}&y={pos.y}&z={pos.z}"
+class Website:
+    browser: WebDriver
 
-def extract_pos(url: str) -> Position:
-    pos: Position = Position()
-    params: List[str] = url.split("?")[1].split("&")
-    for param in params:
-        (key, val) = param.split("=")
-        try:
-            match key:
-                case "x":
-                    pos.x = float(val)
-                case "y":
-                    pos.y = float(val)
-                case "z":
-                    pos.z = int(val)
-        except ValueError:
-            print(f"Failed to parse parameter {key}.")
-    return pos
+    # Default WebDriver executable path
+    driver: str = "/usr/bin/geckodriver"
 
-def get_position(
-        webdriver: WebDriver,
-        message: str,
-        capture: str,
-        pos: Position | None = None
-    ) -> Position:
+    def __init__(self, browser: WebDriver | None = None):
+        if browser is None:
+            service: FirefoxService = FirefoxService(executable_path=self.driver)
+            self.browser = Firefox(service=service)
+        else:
+            self.browser = browser
 
-    if pos is not None:
-        webdriver.get(get_url(pos))
+    def get_position(
+            self,
+            message: str,
+            capture: str,
+            starting_pos: Position | None = None
+        ) -> Position:
+        if starting_pos is not None:
+            self.browser.get(self.pos_to_url(starting_pos))
 
-    print(message)
-    input(f"Press Enter to {capture}...")
+        print(message)
+        input(f"Press Enter to {capture}...")
 
-    new_pos: Position = extract_pos(webdriver.current_url)
-    print("Captured: " + str(new_pos))
+        captured: Position = self.url_to_pos(self.browser.current_url)
+        print("Captured: " + str(captured))
 
-    return new_pos
+        return captured
 
-class Settings:
+    def pos_to_url(self, pos: Position) -> str:
+        raise NotImplementedError
+
+    def url_to_pos(self, url: str) -> Position:
+        raise NotImplementedError
+
+class MapyCZ(Website):
+    def pos_to_url(self, pos: Position) -> str:
+        return f"https://mapy.cz/turisticka?l=0&x={pos.x}&y={pos.y}&z={pos.z}"
+
+    def url_to_pos(self, url: str) -> Position:
+        pos: Position = Position()
+        params: List[str] = url.split("?")[1].split("&")
+
+        for param in params:
+            (key, val) = param.split("=")
+            try:
+                match key:
+                    case "x":
+                        pos.x = float(val)
+                    case "y":
+                        pos.y = float(val)
+                    case "z":
+                        pos.z = int(val)
+            except ValueError:
+                print(f"Failed to parse parameter {key}.")
+
+        return pos
+
+
+class MapBuilder:
+    website: Website
+
+    # Top-left position
     start: Position
+    width: float
+    height: float
+
     u_shift: float
     r_shift: float
-    up: int
-    down: int
-    left: int
-    right: int
 
     def __init__(self,
+                 website: Website,
                  start: Position,
+                 width: float,
+                 height: float,
                  u_shift: float,
                  r_shift: float,
-                 up: int = 1,
-                 down: int = 1,
-                 left: int = 1,
-                 right: int = 1
                 ):
+        self.website = website
         self.start = start
+        self.width = width
+        self.height = height
         self.u_shift = u_shift
         self.r_shift = r_shift
-        self.up = up
-        self.down = down
-        self.right = right
-        self.left = left
 
-def get_start() -> Settings:
-    service: FirefoxService = FirefoxService(executable_path=DRIVER)
-    browser: Firefox = Firefox(service=service)
+    def from_area(website: Website) -> Self:
+        # First capture the starting position
+        # (the centre of the map)
+        start_pos: Position = website.get_position(
+            "Get to your desired start location and set your zoom level.",
+            "start measuring",
+            Position()
+        )
 
-    start_pos: Position = get_position(
-        browser,
-        "Get to your desired start location and set your zoom level.",
-        "start measuring",
-        Position()
-    )
+        # Get the shift amount between frames
+        # the shift such that the frames overlap only by a little
+        #
+        # This is something
+        message: str = "Move {} until only a small part of the area overlaps"
+        capture: str = "{} shift"
 
-    right_pos: Position = get_position(
-        browser,
-        "Move east until only a small part of the area overlaps",
-        "east shift"
-    )
+        direction: str = "right"
+        right_shift_pos: Position = website.get_position(
+            message.format(direction),
+            capture.format(direction),
+            start_pos
+        )
 
-    up_pos: Position = get_position(
-        browser,
-        "Move north until only a small part of the area overlaps",
-        "north shift",
-        start_pos
-    )
+        direction: str = "up"
+        up_shift_pos: Position = website.get_position(
+            message.format(direction),
+            capture.format(direction),
+            start_pos
+        )
 
-    right_shift: float = right_pos.x - start_pos.x
-    up_shift: float = up_pos.y - start_pos.y
-    print(f"Using east shift of {right_shift} and north shift of {up_shift}")
+        # TODO: Verify correct right/up shift signs
+        right_shift: float = right_shift_pos.x - start_pos.x
+        up_shift: float = up_shift_pos.y - start_pos.y
+        print(f"Using right shift of {right_shift} and up shift of {up_shift}")
 
-    move: str = "Move as {} as you want the map to go."
-    boundary: str = "the {} boundary"
+        move: str = "Move as {} as you want the map to go."
+        boundary: str = "the {} boundary"
 
-    direction: str = "north"
-    north_pos: Position = get_position(
-        browser,
-        move.format(direction),
-        boundary.format(direction),
-        start_pos
-    )
-    up: int = ceil((start_pos.y - north_pos.y) / up_shift)
+        direction: str = "north"
+        north_pos: Position = website.get_position(
+            move.format(direction),
+            boundary.format(direction),
+            start_pos
+        )
 
-    direction = "south"
-    south_pos: Position = get_position(
-        browser,
-        move.format(direction),
-        boundary.format(direction),
-        start_pos
-    )
-    down: int = ceil((south_pos.y - start_pos.y) / up_shift)
+        direction: str = "south"
+        south_pos: Position = website.get_position(
+            move.format(direction),
+            boundary.format(direction),
+            start_pos
+        )
 
-    direction = "east"
-    east_pos: Position = get_position(
-        browser,
-        move.format(direction),
-        boundary.format(direction),
-        start_pos
-    )
-    right: int = ceil((east_pos.x - start_pos.x) / right_shift)
+        direction: str = "east"
+        east_pos: Position = website.get_position(
+            move.format(direction),
+            boundary.format(direction),
+            start_pos
+        )
 
-    direction = "west"
-    west_pos: Position = get_position(
-        browser,
-        move.format(direction),
-        boundary.format(direction),
-        start_pos
-    )
-    left: int = ceil((start_pos.x - west_pos.x) / right_shift)
+        direction: str = "west"
+        west_pos: Position = website.get_position(
+            move.format(direction),
+            boundary.format(direction),
+            start_pos
+        )
 
-    return Settings(start_pos, up_shift, right_shift, up, down, left, right)
+        width: Position = east_pos - west_pos
+        print(f"Width: {width}")
 
-# Takes prictures via Selenium webdriver and stores them with the appropriate name
-# at the appropriate place
-def take_pictures(x: float, y: float, z: int, width: int, height: int) -> list[str]:
-    return []
+        height: Position = north_pos - south_pos
+        print(f"Height: {height}")
 
-def assemble_pictures() -> str:
-    return ""
+        # TODO: Fix start_pos to be top-left point
+        return MapBuilder(website, start_pos, width.x, height.y, up_shift, right_shift)
+
+
+    # Takes frames via Selenium webdriver and stores them with the appropriate name
+    # at the appropriate place
+    def take_frames(self) -> list[str]:
+        # TODO: Temporary folder
+        frames: list[str] = []
+        return frames
+
+    def take_frame(self, pos: Position, id: int) -> str:
+        filename: str = f"frame-{id}.png"
+
+        # Take a frame
+        # TODO: Screenshot or save picture via website
+        # Screenshot is website agnostic
+        # Any downsides to screenshot vs site specific download?
+
+        self.browser.get(pos.to_url())
+        # TODO: Does this work?
+        self.browser.save_screenshot(filename)
+
+        return filename
+
+    # Assembles frames into one picture
+    def assemble(pictures: list[str]) -> str:
+        return "map.png"
+
+    def build(self):
+        print("Taking frames ...")
+        pictures: list[str] = self.take_frames()
+        print("Assembling frames into a map ...")
+        result: str = self.assemble()
+        print(f"Final map: {result}")
+
+    def close(self):
+        self.browser.close()
+        self.browser.quit()
 
 if __name__ == "__main__":
-    settings: Settings = get_start()
+    website: Website = MapyCZ()
+    builder: MapBuilder = MapBuilder.from_area(website)
+    builder.build()
+    builder.close()
+
