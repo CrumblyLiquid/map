@@ -1,6 +1,10 @@
 from typing import List, Self, override
 from abc import abstractmethod
 from pathlib import Path
+import time
+import glob
+import os
+from mpmath import mpf, ceil
 
 # Selenium
 # On Arch: python-selenium and geckodriver packages are required
@@ -12,11 +16,11 @@ from selenium.webdriver.firefox.webdriver import WebDriver
 # - Choose output name/folder
 
 class Position:
-    x: float
-    y: float
+    x: mpf
+    y: mpf
     z: int
 
-    def __init__(self, x: float = 15.0, y: float = 50.0, z: int = 16):
+    def __init__(self, x: mpf = 15.0, y: mpf = 50.0, z: int = 16):
         self.x = x
         self.y = y
         self.z = z
@@ -50,6 +54,9 @@ class Website:
         self.browser.close()
 
     def set_position(self, pos: Position):
+        '''
+        Load a map with the specified Position
+        '''
         self.browser.get(self.pos_to_url(pos))
 
     def get_position(
@@ -58,6 +65,10 @@ class Website:
             capture: str,
             starting_pos: Position | None = None
         ) -> Position:
+        '''
+        Display a map and let the user choose
+        a location, then read the location from the URL
+        '''
         if starting_pos is not None:
             self.set_position(starting_pos)
 
@@ -82,30 +93,83 @@ class Website:
 
     @abstractmethod
     def prepare_screenshot(self):
+        '''
+        Prepares the page for screenshot
+        (e.g. remove UI elements, etc.)
+        '''
         raise NotImplementedError()
 
-    def save_screenshot(self, path: Path):
+    def save_screenshot(self, name: Path):
+        '''
+        Save a screenshot of the bare map
+        to a specified location
+        '''
         self.prepare_screenshot()
-        self.browser.save_screenshot(path)
+        self.browser.save_screenshot(name)
 
     @abstractmethod
     def pos_to_url(self, pos: Position) -> str:
+        '''
+        Return a URL corresponding to the given Position
+        '''
         raise NotImplementedError()
 
     @abstractmethod
     def url_to_pos(self, url: str) -> Position:
+        '''
+        Extract the Position from the given URL
+        '''
         raise NotImplementedError()
 
 class MapyCZ(Website):
+    def hide_ui(self):
+        '''
+        Hide the UI elements of the website
+        '''
+
+        ui_script = f'''\
+            // Hide UI elements
+            let controls = document.getElementById('all-controls');
+            controls.style.display = 'none';
+        '''
+
+        self.browser.execute_script(ui_script)
+
+    def add_crosshair(self):
+        '''
+        Add a crosshair to the center of the screen
+        to make alignment easier
+        '''
+
+        crosshair_path = os.path.dirname(__file__) + '/crosshair.html' 
+        with open(crosshair_path) as file:
+            crosshair = file.read().replace('\n', ' ')
+
+        crosshair_script = f'''\
+            // Remove UI elements
+            let controls = document.getElementById('all-controls');
+            controls.style.display = 'none';
+
+            // Add crosshair
+            let scene = document.getElementById('scene');
+            let crosshair = document.createElement('div');
+            crosshair.innerHTML=`%s`
+            scene.appendChild(crosshair)
+        ''' % crosshair
+
+        self.browser.execute_script(crosshair_script)
+
+
     @override
     def prepare_position(self):
-        # TODO: Implement center cursor and maybe a zoom box
-        pass
+        # TODO: Maybe implement a zoom box?
+        self.hide_ui()
+        self.add_crosshair()
+
 
     @override
     def prepare_screenshot(self):
-        # TODO: Remove UI elemets
-        pass
+        self.hide_ui()
 
     @override
     def pos_to_url(self, pos: Position) -> str:
@@ -121,9 +185,9 @@ class MapyCZ(Website):
             try:
                 match key:
                     case "x":
-                        pos.x = float(val)
+                        pos.x = mpf(val)
                     case "y":
-                        pos.y = float(val)
+                        pos.y = mpf(val)
                     case "z":
                         pos.z = int(val)
             except ValueError:
@@ -137,19 +201,19 @@ class MapBuilder:
 
     # Top-left position
     start: Position
-    width: float
-    height: float
+    width: mpf
+    height: mpf
 
-    u_shift: float
-    r_shift: float
+    u_shift: mpf
+    r_shift: mpf
 
     def __init__(self,
                  website: Website,
                  start: Position,
-                 width: float,
-                 height: float,
-                 u_shift: float,
-                 r_shift: float,
+                 width: mpf,
+                 height: mpf,
+                 u_shift: mpf,
+                 r_shift: mpf,
                 ):
         self.website = website
         self.start = start
@@ -159,7 +223,7 @@ class MapBuilder:
         self.r_shift = r_shift
 
     @staticmethod
-    def get_shift(website: Website) -> tuple[Position, float, float]:
+    def get_shift(website: Website) -> tuple[Position, mpf, mpf]:
         # First capture the starting position
         # (the centre of the map)
         start_pos: Position = website.get_position(
@@ -189,9 +253,13 @@ class MapBuilder:
             start_pos
         )
 
-        # TODO: Verify correct right/up shift signs
-        right_shift: float = right_shift_pos.x - start_pos.x
-        up_shift: float = up_shift_pos.y - start_pos.y
+        right_shift: mpf = right_shift_pos.x - start_pos.x
+        up_shift: mpf = up_shift_pos.y - start_pos.y
+
+        # Both should be positive
+        assert right_shift > 0
+        assert up_shift > 0
+
         print(f"Using right shift of {right_shift} and up shift of {up_shift}")
 
         return (start_pos, right_shift, up_shift)
@@ -200,17 +268,34 @@ class MapBuilder:
     def from_box(cls, website: Website) -> Self:
         (start_pos, right_shift, up_shift) = cls.get_shift(website)
 
-        # TODO: Add info messages
-        end_pos: Position = website.get_position(
-            "",
-            "",
+        message = "Go to the most {} point of your map"
+        capture = "capture the {} corner"
+
+        corner = "top-left"
+        top_left_pos: Position = website.get_position(
+            message.format(corner),
+            capture.format(corner),
+            start_pos
+        )
+        # Set zoom level to be the same as start_pos
+        # for taking screenshots later
+        top_left_pos.z = start_pos.z
+
+        corner = "down-right"
+        down_right_pos: Position = website.get_position(
+            message.format(corner),
+            capture.format(corner),
             start_pos
         )
 
-        box: Position = start_pos - end_pos
+        width: mpf = (down_right_pos.x - top_left_pos.x) / right_shift
+        height: mpf = (top_left_pos.y - down_right_pos.y) / up_shift
+        print(f"Width: {width} (({down_right_pos.x} - {top_left_pos.x}) / {right_shift}), Height: {height} (({top_left_pos.y} - {down_right_pos.y}) / {up_shift})") 
 
-        # TODO: Verify box.x and box.y are correct
-        return cls(website, start_pos, box.x, box.y, up_shift, right_shift)
+        assert width > 0
+        assert height > 0
+
+        return cls(website, start_pos, height, width, up_shift, right_shift)
 
     @classmethod
     def from_center(cls, website: Website) -> Self:
@@ -259,15 +344,30 @@ class MapBuilder:
 
     # Takes frames via Selenium webdriver and stores them with the appropriate name
     # at the appropriate place
-    def take_frames(self) -> list[str]:
-        # TODO: Temporary folder
+    def take_frames(self, tmp_folder: Path) -> list[str]:
         frames: list[str] = []
-        # filename: str = f"frame-{id}.png"
+
+
+        y: mpf = 0
+        while(y < ceil(self.height)):
+            x: mpf = 0
+            while(x < ceil(self.width)):
+                print(x, y)
+                pos: Position = Position(self.start.x + x * self.r_shift,
+                                         self.start.y + y * self.u_shift,
+                                         self.start.z)
+                filename: str = f"frame-{y}-{x}.png"
+                filepath: Path = tmp_folder / filename
+                self.take_frame(pos, filepath)
+                x += 1
+            y += 1
+
         return frames
 
     def take_frame(self, pos: Position, name: Path):
         # Take a frame
         self.website.set_position(pos)
+        time.sleep(1)
         self.website.save_screenshot(name)
 
     # Assembles frames into one picture
@@ -275,8 +375,19 @@ class MapBuilder:
         pass
 
     def build(self):
+        # TODO: Temporary folder
+        tmp_folder = "map_tmp"
+        tmp_path = Path(f"./{tmp_folder}")
+
+        if os.path.exists(tmp_path):
+            print(glob.glob(f"./{tmp_folder}/*"))
+            for file in glob.glob(f"./{tmp_folder}/*"):
+                os.remove(file)
+        else:
+            os.mkdir(tmp_path)
+
         print("Taking frames ...")
-        pictures: list[str] = self.take_frames()
+        pictures: list[str] = self.take_frames(tmp_path)
 
         print("Assembling frames into a map ...")
         name: Path = Path("map.png")
