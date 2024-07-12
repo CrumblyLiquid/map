@@ -4,7 +4,10 @@ from pathlib import Path
 import time
 import glob
 import os
+
 from mpmath import mpf, ceil
+from PIL import Image as Img
+from PIL.Image import Image
 
 # Selenium
 # On Arch: python-selenium and geckodriver packages are required
@@ -285,7 +288,6 @@ class MapBuilder:
         down_right_pos: Position = website.get_position(
             message.format(corner),
             capture.format(corner),
-            start_pos
         )
 
         width: mpf = (down_right_pos.x - top_left_pos.x) / right_shift
@@ -295,10 +297,13 @@ class MapBuilder:
         assert width > 0
         assert height > 0
 
-        return cls(website, start_pos, height, width, up_shift, right_shift)
+        return cls(website, top_left_pos, height, width, up_shift, right_shift)
 
     @classmethod
     def from_center(cls, website: Website) -> Self:
+        # TODO: Fix start_pos in Self constructor to be top-left point
+        print("Warning: This method is broken!")
+
         (start_pos, right_shift, up_shift) = cls.get_shift(website)
 
         move: str = "Move as {} as you want the map to go."
@@ -338,26 +343,27 @@ class MapBuilder:
         height: Position = north_pos - south_pos
         print(f"Height: {height}")
 
-        # TODO: Fix start_pos to be top-left point
         return cls(website, start_pos, width.x, height.y, up_shift, right_shift)
-
 
     # Takes frames via Selenium webdriver and stores them with the appropriate name
     # at the appropriate place
-    def take_frames(self, tmp_folder: Path) -> list[str]:
-        frames: list[str] = []
-
+    def take_frames(self, tmp_folder: Path) -> list[list[str]]:
+        frames: list[list[str]] = []
 
         y: mpf = 0
         while(y < ceil(self.height)):
+            if len(frames) <= y:
+                frames.append([])
             x: mpf = 0
+
             while(x < ceil(self.width)):
-                print(x, y)
+                print(f"Taking frame {x}, {y}")
                 pos: Position = Position(self.start.x + x * self.r_shift,
-                                         self.start.y + y * self.u_shift,
+                                         self.start.y - y * self.u_shift,
                                          self.start.z)
                 filename: str = f"frame-{y}-{x}.png"
                 filepath: Path = tmp_folder / filename
+                frames[y].append(filepath)
                 self.take_frame(pos, filepath)
                 x += 1
             y += 1
@@ -371,8 +377,38 @@ class MapBuilder:
         self.website.save_screenshot(name)
 
     # Assembles frames into one picture
-    def assemble(self, pictures: list[str], name: Path):
-        pass
+    def assemble(self, pictures: list[list[str]], name: Path):
+        assert len(pictures) > 0 and len(pictures[0]) > 0
+
+        x_offset = 0
+        y_offset = 0
+
+        height = len(pictures)
+        width = len(pictures[0])
+        (fwidth, fheight) = Img.open(pictures[0][0]).size
+
+        # TODO: Do this automatically
+        while True:
+            # Create blank image that can fit all the tiles
+            # + account for offsets
+            full_img: Image = Img.new("RGB", (width * fwidth - x_offset * width, height * fheight - y_offset * height))
+            for (y, row) in enumerate(pictures):
+                for (x, pic) in enumerate(row):
+                    img = Img.open(pic)
+                    img.convert("RGB")
+                    print(f"Row: {full_img.width}, {full_img.height}, Img: {img.width}, {img.height}")
+                    full_img.paste(img, (x * fwidth - x_offset * x, y * fheight - y_offset * y))
+
+            # Show a preview
+            full_img.show()
+
+            # TODO: Adjusting on only 3-5 sample images
+            cont = input("Do you want to adjust?").lower()
+            if cont == 'n':
+                full_img.save(name)
+                break
+            else:
+                (x_offset, y_offset) = [int(i) for i in input(f"Adjustment ({x_offset}, {y_offset}): ").split(',')]
 
     def build(self):
         # TODO: Temporary folder
@@ -387,7 +423,7 @@ class MapBuilder:
             os.mkdir(tmp_path)
 
         print("Taking frames ...")
-        pictures: list[str] = self.take_frames(tmp_path)
+        pictures: list[list[str]] = self.take_frames(tmp_path)
 
         print("Assembling frames into a map ...")
         name: Path = Path("map.png")
@@ -401,6 +437,12 @@ class MapBuilder:
 if __name__ == "__main__":
     website: Website = MapyCZ()
     builder: MapBuilder = MapBuilder.from_box(website)
+    # builder: MapBuilder = MapBuilder(website,
+    #                                  Position(15, 50, 16),
+    #                                  mpf('2.428566307326'),
+    #                                  mpf('2.40825490636835'),
+    #                                  mpf('0.0124532000000031'),
+    #                                  mpf('0.0195264999999996')
+    #                                  )
     builder.build()
     builder.close()
-
