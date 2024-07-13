@@ -2,9 +2,11 @@
 Collection of scripts to create custom maps out of map screenshots
 
 ## Requirements
-- [Python 3.11](https://www.python.org/downloads)
+- [Python 3.12](https://www.python.org/downloads)
 - [Firefox](https://www.mozilla.org/en-US/firefox/new)
 - [GeckoDriver](https://github.com/mozilla/geckodriver)
+- [Pillow](https://pypi.org/project/pillow/)
+- [mpmath](https://mpmath.org/)
 
 ## Usage
 Make sure that the DRIVER variable (at the top of `map.py`)
