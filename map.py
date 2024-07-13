@@ -13,6 +13,10 @@ from PIL.Image import Image
 # On Arch: python-selenium and geckodriver packages are required
 from selenium.webdriver import Firefox, FirefoxService
 from selenium.webdriver.firefox.webdriver import WebDriver
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException
 
 # TODO:
 # - Detect swapped east/west or south/north bounds
@@ -23,7 +27,7 @@ class Position:
     y: mpf
     z: int
 
-    def __init__(self, x: mpf = 15.0, y: mpf = 50.0, z: int = 16):
+    def __init__(self, x: mpf = mpf('15.0'), y: mpf = mpf('50.0'), z: int = 16):
         self.x = x
         self.y = y
         self.z = z
@@ -44,7 +48,9 @@ class Website:
     browser: WebDriver
 
     # Default WebDriver executable path
-    driver: str = "/usr/bin/geckodriver"
+    # driver: str = "/usr/bin/geckodriver"
+    # NixOS WebDriver executable path
+    driver: str = "/run/current-system/sw/bin/geckodriver"
 
     def __init__(self, browser: WebDriver | None = None):
         if browser is None:
@@ -107,6 +113,16 @@ class Website:
         Save a screenshot of the bare map
         to a specified location
         '''
+        try:
+            WebDriverWait(
+                    self.browser,
+                    100
+            ).until(EC.visibility_of_element_located((By.CSS_SELECTOR, '.tiles')))
+            print("Page loaded...")
+        except TimeoutException:
+            time.sleep(2)
+            print("Loading took too much time!")
+
         self.prepare_screenshot()
         self.browser.save_screenshot(name)
 
@@ -134,9 +150,27 @@ class MapyCZ(Website):
             // Hide UI elements
             let controls = document.getElementById('all-controls');
             controls.style.display = 'none';
+
+            // Mobile UI - still TODO change map class from smap to map
+            let block_map = document.getElementById('block-map');
+            block_map.style.display = 'none';
+
+            let layout_content = document.getElementById('layout-content');
+            layout_content.style.display = 'none';
         '''
 
         self.browser.execute_script(ui_script)
+
+    def hide_paid_poi(self):
+        '''
+        Hides the paid popup POIs that are
+        just annoying >:(
+        '''
+
+        script = '''
+            document.styleSheets[0].insertRule(".type-paid {display: none !important;}", 0 )
+            '''
+        self.browser.execute_script(script)
 
     def add_crosshair(self):
         '''
@@ -165,21 +199,38 @@ class MapyCZ(Website):
 
     @override
     def prepare_position(self):
+        '''
+        Prepare the website for selecting a position
+        '''
+
         # TODO: Maybe implement a zoom box?
         self.hide_ui()
+        self.hide_paid_poi()
         self.add_crosshair()
 
 
     @override
     def prepare_screenshot(self):
+        '''
+        Prepare the website for taking a screenshot
+        '''
+
+        # TODO: Maybe hide certain icons?
         self.hide_ui()
+        self.hide_paid_poi()
 
     @override
     def pos_to_url(self, pos: Position) -> str:
+        '''
+        Convert a Position to the corresponding website URL
+        '''
         return f"https://mapy.cz/turisticka?l=0&x={pos.x}&y={pos.y}&z={pos.z}"
 
     @override
     def url_to_pos(self, url: str) -> Position:
+        '''
+        Extract a Position from the Website URL
+        '''
         pos: Position = Position()
         params: List[str] = url.split("?")[1].split("&")
 
@@ -227,6 +278,11 @@ class MapBuilder:
 
     @staticmethod
     def get_shift(website: Website) -> tuple[Position, mpf, mpf]:
+        '''
+        Get the starting position and the up/right shift to use
+        between frames
+        '''
+
         # First capture the starting position
         # (the centre of the map)
         start_pos: Position = website.get_position(
@@ -345,39 +401,63 @@ class MapBuilder:
 
         return cls(website, start_pos, width.x, height.y, up_shift, right_shift)
 
-    # Takes frames via Selenium webdriver and stores them with the appropriate name
-    # at the appropriate place
-    def take_frames(self, tmp_folder: Path) -> list[list[str]]:
+    def take_frames(self, folder: Path) -> list[list[str]]:
+        '''
+        Takes individual frames and stores them with the appropriate name
+        to the requested folder
+
+        Also gives the option to retake any imperfect frames
+        '''
         frames: list[list[str]] = []
 
         y: mpf = 0
         while(y < ceil(self.height)):
             if len(frames) <= y:
                 frames.append([])
-            x: mpf = 0
 
+            x: mpf = 0
             while(x < ceil(self.width)):
-                print(f"Taking frame {x}, {y}")
-                pos: Position = Position(self.start.x + x * self.r_shift,
-                                         self.start.y - y * self.u_shift,
-                                         self.start.z)
-                filename: str = f"frame-{y}-{x}.png"
-                filepath: Path = tmp_folder / filename
-                frames[y].append(filepath)
-                self.take_frame(pos, filepath)
+                frames[y].append(self.take_frame(x, y, folder))
                 x += 1
+
             y += 1
+
+        while True:
+            again = input("Do you want to retake any frames? ").lower()
+            if again == 'n':
+                break
+
+            retakes = [ s.split(',') for s in input("What do you want to retake?\nExample (y,x): 1,3;2,3\n").split(';') ]
+            frames = [ [ int(n) for n in retake ] for retake in retakes ]
+
+            print("Reshooting frames: ", frames)
+            for frame in frames:
+                self.take_frame(frame[1], frame[0], folder)
 
         return frames
 
-    def take_frame(self, pos: Position, name: Path):
+    def take_frame(self, x: int, y: int, folder: Path) -> Path:
+        '''
+        Take a specified frame
+        '''
+        print(f"Taking frame {x}, {y}")
+        pos: Position = Position(self.start.x + x * self.r_shift,
+                                 self.start.y - y * self.u_shift,
+                                 self.start.z)
+        name: str = f"frame-{y}-{x}.png"
+        path: Path = folder / name
+
         # Take a frame
         self.website.set_position(pos)
         time.sleep(1)
-        self.website.save_screenshot(name)
+        self.website.save_screenshot(path)
 
-    # Assembles frames into one picture
+        return path
+
     def assemble(self, pictures: list[list[str]], name: Path):
+        '''
+        Assemble frames into one picture
+        '''
         assert len(pictures) > 0 and len(pictures[0]) > 0
 
         x_offset = 0
@@ -389,6 +469,9 @@ class MapBuilder:
 
         # TODO: Do this automatically
         while True:
+            adj = input(f"Adjustment ({x_offset}, {y_offset}): ")
+            (x_offset, y_offset) = [ int(i) for i in adj.split(',') ] if adj else (0,0)
+
             # Create blank image that can fit all the tiles
             # + account for offsets
             full_img: Image = Img.new("RGB", (width * fwidth - x_offset * width, height * fheight - y_offset * height))
@@ -407,23 +490,56 @@ class MapBuilder:
             if cont == 'n':
                 full_img.save(name)
                 break
-            else:
-                (x_offset, y_offset) = [int(i) for i in input(f"Adjustment ({x_offset}, {y_offset}): ").split(',')]
 
     def build(self):
         # TODO: Temporary folder
         tmp_folder = "map_tmp"
         tmp_path = Path(f"./{tmp_folder}")
 
+        files = []
         if os.path.exists(tmp_path):
-            print(glob.glob(f"./{tmp_folder}/*"))
-            for file in glob.glob(f"./{tmp_folder}/*"):
-                os.remove(file)
+            files = glob.glob(f"./{tmp_folder}/*")
         else:
             os.mkdir(tmp_path)
 
-        print("Taking frames ...")
-        pictures: list[list[str]] = self.take_frames(tmp_path)
+        if len(files):
+            print("Exsiting files: ", files)
+        else:
+            print("No existing files")
+
+        pictures: list[list[str]] = []
+
+        reuse = input("Do you want to reuse previous screenshots? ").lower()
+        if reuse != 'n':
+            # Reuse pictures
+            for file in files:
+                name: str = os.path.basename(file)
+                # Remove filetype
+                name = name.split('.')[0]
+                (frame,y,x) = name.split('-')
+                x = int(x)
+                y = int(y)
+
+                # Extend the list far enough
+                # (file names might be out of order)
+                while len(pictures) <= y:
+                    pictures.append([])
+
+                while len(pictures[y]) <= x:
+                    pictures[y].append('')
+
+                pictures[y][x] = file
+
+        else:
+            for file in files:
+                os.remove(file)
+            print("Removed existing files in temp. folder")
+
+            input("Start taking frames in 3 seconds?")
+            time.sleep(3)
+
+            print("Taking frames ...")
+            pictures = self.take_frames(tmp_path)
 
         print("Assembling frames into a map ...")
         name: Path = Path("map.png")
@@ -437,6 +553,8 @@ class MapBuilder:
 if __name__ == "__main__":
     website: Website = MapyCZ()
     builder: MapBuilder = MapBuilder.from_box(website)
+
+    # Default
     # builder: MapBuilder = MapBuilder(website,
     #                                  Position(15, 50, 16),
     #                                  mpf('2.428566307326'),
@@ -444,5 +562,26 @@ if __name__ == "__main__":
     #                                  mpf('0.0124532000000031'),
     #                                  mpf('0.0195264999999996')
     #                                  )
+
+    # Test with zoom 16
+    # 18,15
+    # builder: MapBuilder = MapBuilder(website,
+    #                                  Position(mpf('15.6491'), mpf('49.7036793'), 16),
+    #                                  mpf('5.0'), # width
+    #                                  mpf('9.0'), # height
+    #                                  mpf('0.0177041'), # u_shift
+    #                                  mpf('0.054245') # r_shift
+    #                                  )
+
+    # Test with zoom 15
+    # 25,30
+    # builder: MapBuilder = MapBuilder(website,
+    #                                  Position(mpf('15.6491'), mpf('49.7036793'), 15),
+    #                                  mpf('3.0'), # width
+    #                                  mpf('5.0'), # height
+    #                                  mpf('0.0349381'), # u_shift
+    #                                  mpf('0.1082325') # r_shift
+    #                                  )
+
     builder.build()
     builder.close()
