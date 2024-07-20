@@ -576,11 +576,21 @@ if __name__ == "__main__":
     # Test with zoom 15
     # 25,30
     # builder: MapBuilder = MapBuilder(website,
-    #                                  Position(mpf('15.6491'), mpf('49.7036793'), 15),
-    #                                  mpf('3.0'), # width
-    #                                  mpf('5.0'), # height
+    #                                  Position(mpf('15.6497834'), mpf('49.7101319'), 15),
+    #                                  mpf('4.0'), # width
+    #                                  mpf('6.0'), # height
     #                                  mpf('0.0349381'), # u_shift
     #                                  mpf('0.1082325') # r_shift
+    #                                  )
+
+    # Test with zoom 14
+    # 26,49
+    # builder: MapBuilder = MapBuilder(website,
+    #                                  Position(mpf('15.6499528'), mpf('49.6975172'), 14),
+    #                                  mpf('3.0'), # width
+    #                                  mpf('4.0'), # height
+    #                                  mpf('0.0688591'), # u_shift
+    #                                  mpf('0.2162933') # r_shift
     #                                  )
 
     builder.build()
