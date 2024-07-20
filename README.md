@@ -16,7 +16,7 @@ Run the script: `python map.py`
 
 ## How does it work?
 I'm using [Mapy.cz](https://mapy.cz) as a source of screenshots which are
-then stitched together using [PanoTools](https://wiki.panotools.org/Main_Page).
+then stitched together into a composite.
 
 ### Mapy.cz
 As far as I know [Mapy.cz](https://mapy.cz) have only a couple
