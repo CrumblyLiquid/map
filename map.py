@@ -356,7 +356,7 @@ class MapBuilder:
         assert width > 0
         assert height > 0
 
-        return cls(website, top_left_pos, height, width, up_shift, right_shift)
+        return cls(website, top_left_pos, width, height, up_shift, right_shift)
 
     @classmethod
     def from_center(cls, website: Website) -> Self:
