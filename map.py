@@ -157,6 +157,9 @@ class MapyCZ(Website):
 
             let layout_content = document.getElementById('layout-content');
             layout_content.style.display = 'none';
+
+            let cookies_prompt = document.getElementsByClassName('szn-cmp-dialog-container')[0];
+            cookies_prompt.style.display = 'none';
         '''
 
         self.browser.execute_script(ui_script)
